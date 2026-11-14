@@ -120,6 +120,19 @@ jobs:
           GIT_SSH_COMMAND=ssh -p $AUR_PORT -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts
           EOF
 
+      # Built packages are binary artefacts: they belong on the GitHub release
+      # for the tag, not in the source repository.
+      #
+      # This runs before the AUR push on purpose. The release is what users
+      # download; the AUR repository only carries the recipe. If the push
+      # fails (server hook, network), the release must still exist.
+      - name: Attach package to release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: packaging/aur/*.pkg.tar.zst
+          fail_on_unmatched_files: false
+
       - name: Publish to AUR repository
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -129,28 +142,36 @@ jobs:
           # The AUR repository holds only what a user needs to rebuild the
           # package: PKGBUILD and .SRCINFO. Sources come from the tagged
           # GitHub release, the binary from the release assets.
+          #
+          # Clone rather than `git init` + force-push. The server runs a
+          # non-fast-forward hook: a force-push is rejected once the branch
+          # already exists (it worked for the very first publish only because
+          # that created the ref). Appending a commit on top of the cloned
+          # history is what the hook expects.
           publish="$RUNNER_TEMP/publish"
-          mkdir -p "$publish"
-          cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO "$publish/"
-
-          cd "$publish"
-          git init -q -b master
-          git add -A
-          git commit -qm "chromius ${GITHUB_REF_NAME#v}"
           # aurweb names repositories by package base at the server root:
           # there is no per-user path segment in the push URL. The ssh:// form
           # carries the port, so no ssh_config alias is involved.
-          git remote add origin "ssh://$AUR_USER@$AUR_HOST:$AUR_PORT/$AUR_REPO_NAME.git"
-          git push -f origin master:master
+          url="ssh://$AUR_USER@$AUR_HOST:$AUR_PORT/$AUR_REPO_NAME.git"
+          if git clone -q "$url" "$publish" 2>/dev/null; then
+            echo "cloned existing AUR repository"
+          else
+            echo "AUR repository has no history yet; starting one"
+            mkdir -p "$publish"
+            git -C "$publish" init -q -b master
+            git -C "$publish" remote add origin "$url"
+          fi
 
-      # Built packages are binary artefacts: they belong on the GitHub release
-      # for the tag, not in the source repository.
-      - name: Attach package to release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: packaging/aur/*.pkg.tar.zst
-          fail_on_unmatched_files: false
+          cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO "$publish/"
+
+          cd "$publish"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no packaging change; nothing to publish"
+            exit 0
+          fi
+          git commit -qm "chromius ${GITHUB_REF_NAME#v}"
+          git push origin master:master
 
       - name: Remove deploy key
         if: always()
