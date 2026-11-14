@@ -1,6 +1,6 @@
 {
   "name": "chromius",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Run many Electron apps inside one shared Chromium host",
   "private": true,
   "type": "commonjs",

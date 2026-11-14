@@ -4,11 +4,12 @@
  *
  * 它不加载任何 App 的代码，只做「窗口工厂 + 子应用注册表 + socket 服务」。
  */
-import { app } from 'electron';
+import { app, protocol } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { startSocketServer } from './ipc-server';
 import { decideMode, ClientSpec } from '../shared/spec';
+import { PRIVILEGED_SCHEMES } from '../shared/schemes';
 import { detectFromBinary } from '../shared/detect';
 import {
   createClient,
@@ -24,6 +25,14 @@ import { startVmClient } from './vm-client';
 app.commandLine.appendSwitch('ozone-platform', 'wayland');
 app.disableHardwareAcceleration();
 
+/**
+ * 在 ready 之前预注册 privileged scheme。清单与理由见 shared/schemes.ts。
+ *
+ * 必须在模块顶层调用（此时 app 尚未 ready）；宿主 ready 之后子应用自己的注册
+ * 会被虚拟 protocol 吞掉并打日志。
+ */
+protocol.registerSchemesAsPrivileged(PRIVILEGED_SCHEMES as Electron.CustomScheme[]);
+
 function parseArgs(): { major: string; socket: string } {
   let major = 'unknown';
   let socket = '';
@@ -35,6 +44,21 @@ function parseArgs(): { major: string; socket: string } {
 }
 
 const { major, socket } = parseArgs();
+
+// 子应用的主进程入口常见写法是 `main(){ try { this.startup() } ... }`，其中
+// startup() 是 async 但**没有被 await**。它内部的任何失败都只会变成未处理的
+// Promise rejection —— 表现为「入口求值完成、但什么都没发生」。宿主默认只打一行
+// 警告，这里把完整堆栈打出来，否则排查时看不到任何线索。
+//
+// 但 VS Code 系会大量抛 `Canceled`：那是它内部的取消信号（pty host、扩展宿主
+// 请求被用户打断等），属于正常控制流，单次会话能刷出几十条完整堆栈。过滤掉它，
+// 否则真正的错误会被淹掉。
+process.on('unhandledRejection', (reason) => {
+  const e = reason as { stack?: string; message?: string; name?: string } | undefined;
+  const msg = e?.message ?? (e?.name ? `${e.name}: ${String(reason)}` : String(reason));
+  if (e?.name === 'Canceled' || msg === 'Canceled' || msg === 'Canceled: Canceled') return;
+  console.error('[chromius-host] unhandled rejection:', e?.stack ?? msg);
+});
 
 // 宿主自己不应有窗口；保活
 app.on('window-all-closed', () => {
@@ -99,7 +123,7 @@ async function handleMessage(msg: Record<string, unknown>): Promise<Record<strin
         fs.mkdirSync(rootDir, { recursive: true });
         const vmHandle = startVmClient(spec, rootDir, () => {
           vmRuns.delete(spec.id);
-        });
+        }, client.windows);
         vmHandle.run();
         vmRuns.set(spec.id, vmHandle);
       } else {

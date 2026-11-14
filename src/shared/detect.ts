@@ -194,11 +194,27 @@ function findAppPayload(binaryDir: string): string | null {
   return null;
 }
 
+/**
+ * 判断一个 App 是否自带「不能安全共享宿主」的原生 `.node` 模块。
+ *
+ * **故意只看解包目录，不扫 `appPath` 本身。** 这个函数的结果在 daemon / shell /
+ * cli 三处都是**硬拒绝**，所以判据必须保守：
+ *
+ *   - asar 包把原生模块解包到 `<asar>.unpacked`。这类模块通常来自用户自己装的
+ *     native 依赖（koffi / better-sqlite3 / node-pty），在共享宿主里加载会踩
+ *     ABI 与进程级全局状态，确实该拒绝。
+ *   - 纯目录布局（VS Code 系全家：Code / Cursor / Antigravity / Kiro）在
+ *     `resources/app/node_modules/**` 里同样带 `.node`，但它们只被 workbench
+ *     主进程按需加载，实测在 Electron 主版本匹配的宿主里工作正常
+ *     （antigravity-ide 在宿主内成功加载 keymapping / spdlog / sqlite3 三个）。
+ *     若把它们也算进来，整个 VS Code 系都会被拒绝——而它们正是主要目标。
+ *
+ * 主版本不匹配才是真正致命的（ABI 绑定），那一关由调用方单独校验。
+ */
 function hasNativeModules(appPath: string, binaryDir: string): boolean {
   const roots = [appPath + '.unpacked', path.join(binaryDir, 'resources', 'app.asar.unpacked')];
   for (const root of roots) {
     if (!fs.existsSync(root)) continue;
-    // 只扫一层层目录，限制深度避免拖慢
     const stack: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
     while (stack.length) {
       const { dir, depth } = stack.pop()!;
