@@ -101,31 +101,24 @@ jobs:
       - name: Set up deploy key
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.AUR_DEPLOY_KEY }}" > ~/.ssh/aur_deploy
-          chmod 600 ~/.ssh/aur_deploy
-          ssh-keyscan -p "$AUR_PORT" "$AUR_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          key="$HOME/.ssh/aur_deploy"
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          printf '%s\n' "${{ secrets.AUR_DEPLOY_KEY }}" > "$key"
+          chmod 600 "$key"
+          ssh-keyscan -p "$AUR_PORT" "$AUR_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
           # Fail here, loudly, if the host key could not be collected — a later
           # git push would otherwise report it as an authentication problem.
-          if ! grep -q "$AUR_HOST" ~/.ssh/known_hosts; then
+          if ! grep -q "$AUR_HOST" "$HOME/.ssh/known_hosts"; then
             echo "::error::ssh-keyscan could not reach $AUR_HOST:$AUR_PORT"
             exit 1
           fi
-          # Written line by line with printf: an indented ssh_config is
-          # silently rejected (the failure then looks like an unresolved
-          # hostname), and a heredoc body at column 0 would break this YAML
-          # block scalar.
-          {
-            printf 'Host aur\n'
-            printf '  HostName %s\n' "$AUR_HOST"
-            printf '  Port %s\n' "$AUR_PORT"
-            printf '  User %s\n' "$AUR_USER"
-            printf '  IdentityFile ~/.ssh/aur_deploy\n'
-            printf '  IdentitiesOnly yes\n'
-            printf '  StrictHostKeyChecking yes\n'
-          } > ~/.ssh/config
-          chmod 600 ~/.ssh/config
-          ssh -G aur | grep -E '^(hostname|port|user|identityfile) '
+          # No ssh_config alias: inside the container job ssh does not
+          # necessarily read the same home directory this script writes to.
+          # Passing the key and the known_hosts file explicitly keeps the push
+          # independent of that.
+          cat > "$GITHUB_ENV" <<EOF
+          GIT_SSH_COMMAND=ssh -p $AUR_PORT -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts
+          EOF
 
       - name: Publish to AUR repository
         if: startsWith(github.ref, 'refs/tags/')
@@ -145,9 +138,10 @@ jobs:
           git add -A
           git commit -qm "chromius ${GITHUB_REF_NAME#v}"
           # aurweb names repositories by package base at the server root:
-          # there is no per-user path segment in the push URL.
-          git remote add origin "aur:$AUR_REPO_NAME.git"
-          git push -f origin master
+          # there is no per-user path segment in the push URL. The ssh:// form
+          # carries the port, so no ssh_config alias is involved.
+          git remote add origin "ssh://$AUR_USER@$AUR_HOST:$AUR_PORT/$AUR_REPO_NAME.git"
+          git push -f origin master:master
 
       # Built packages are binary artefacts: they belong on the GitHub release
       # for the tag, not in the source repository.
