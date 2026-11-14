@@ -19,3 +19,4 @@
 # Local experiments and measurement evidence
 /evidence/
 /tmp/
+/package-lock.json

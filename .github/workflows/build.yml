@@ -49,11 +49,28 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE"
           echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
 
+      # The PKGBUILD takes its source from the v$pkgver tag, which is the right
+      # thing for users cloning the AUR repository — but it cannot work for a
+      # manual run from a branch, because that tag may not exist yet. Pack the
+      # checkout into the same layout the git source produces so the packaging
+      # steps are still exercised before a tag is created.
+      - name: Use the checkout as the source (branch builds)
+        if: github.ref_type != 'tag'
+        working-directory: packaging/aur
+        run: |
+          ver=$(sed -n 's/^pkgver=//p' PKGBUILD | head -1)
+          mkdir -p "$RUNNER_TEMP/srcroot/chromius"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/srcroot/chromius"
+          tar -czf "chromius-$ver.tar.gz" -C "$RUNNER_TEMP/srcroot" chromius
+          sed -i "s|git+https://github.com/xingguangcuican6666/chromius.git#tag=v\$pkgver|chromius-\$pkgver.tar.gz|" PKGBUILD
+          grep -m1 '^source=' -A1 PKGBUILD
+          chown -R builder:builder "$RUNNER_TEMP/srcroot" "chromius-$ver.tar.gz"
+
       - name: Build package
         working-directory: packaging/aur
         run: |
           su builder -c 'cd "$GITHUB_WORKSPACE/packaging/aur" && makepkg -f --noconfirm --nodeps'
-          ls -la packaging/aur/*.pkg.tar.zst
+          ls -la *.pkg.tar.zst
 
       # .SRCINFO is what the AUR (and any AUR helper) reads to learn the
       # package's metadata. It must match the PKGBUILD exactly, so it is
