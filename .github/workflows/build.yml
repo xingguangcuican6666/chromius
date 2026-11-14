@@ -111,17 +111,19 @@ jobs:
             echo "::error::ssh-keyscan could not reach $AUR_HOST:$AUR_PORT"
             exit 1
           fi
-          # The heredoc body must start at column 0: ssh rejects a config whose
-          # lines are indented, and the failure looks like an unresolved host.
-          cat > ~/.ssh/config <<EOF
-Host aur
-  HostName $AUR_HOST
-  Port $AUR_PORT
-  User $AUR_USER
-  IdentityFile ~/.ssh/aur_deploy
-  IdentitiesOnly yes
-  StrictHostKeyChecking yes
-EOF
+          # Written line by line with printf: an indented ssh_config is
+          # silently rejected (the failure then looks like an unresolved
+          # hostname), and a heredoc body at column 0 would break this YAML
+          # block scalar.
+          {
+            printf 'Host aur\n'
+            printf '  HostName %s\n' "$AUR_HOST"
+            printf '  Port %s\n' "$AUR_PORT"
+            printf '  User %s\n' "$AUR_USER"
+            printf '  IdentityFile ~/.ssh/aur_deploy\n'
+            printf '  IdentitiesOnly yes\n'
+            printf '  StrictHostKeyChecking yes\n'
+          } > ~/.ssh/config
           chmod 600 ~/.ssh/config
           ssh -G aur | grep -E '^(hostname|port|user|identityfile) '
 
