@@ -59,8 +59,13 @@ jobs:
         working-directory: packaging/aur
         run: |
           ver=$(sed -n 's/^pkgver=//p' PKGBUILD | head -1)
+          # tar the working tree rather than `git archive`: the checkout was
+          # chown'd to the build user above, so git refuses to read it as root.
           mkdir -p "$RUNNER_TEMP/srcroot/chromius"
-          git archive HEAD | tar -x -C "$RUNNER_TEMP/srcroot/chromius"
+          tar -cf - -C "$GITHUB_WORKSPACE" \
+              --exclude=.git --exclude=node_modules --exclude=out \
+              --exclude=pkg --exclude='*.pkg.tar.zst' . \
+            | tar -xf - -C "$RUNNER_TEMP/srcroot/chromius"
           tar -czf "chromius-$ver.tar.gz" -C "$RUNNER_TEMP/srcroot" chromius
           sed -i "s|git+https://github.com/xingguangcuican6666/chromius.git#tag=v\$pkgver|chromius-\$pkgver.tar.gz|" PKGBUILD
           grep -m1 '^source=' -A1 PKGBUILD
