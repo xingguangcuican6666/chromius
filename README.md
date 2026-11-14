@@ -60,6 +60,17 @@
 
 ## 安装
 
+### 从 AUR
+
+```bash
+yay -S chromius          # 或 paru -S chromius
+```
+
+包只装 `chromius` 本身；共享宿主用的是系统里的 `electron<major>`（按需安装，
+见下方 `init-runtime`）。运行时零 npm 依赖。
+
+### 从源码
+
 ```bash
 npm install
 npm run build          # 编译 TS + shim
@@ -74,9 +85,8 @@ node out/cli/index.js uninstall       # 撤销接管
 ### 守护进程（可选，让首次启动更快）
 
 ```bash
-node out/cli/index.js daemon
+chromius daemon
 # 或交给 systemd --user：
-cp systemd/chromiusd.service ~/.config/systemd/user/
 systemctl --user enable --now chromiusd
 ```
 
@@ -85,7 +95,7 @@ systemctl --user enable --now chromiusd
 ### 补齐缺失的运行时
 
 ```bash
-node out/cli/index.js init-runtime 44    # 提示如何安装 electron44
+chromius init-runtime 44    # 提示如何安装 electron44
 ```
 
 ## 命令
@@ -120,4 +130,12 @@ src/
   daemon/   按运行时版本管理宿主生命周期
   cli/      install / launch / status / doctor / init-runtime；installer
   shim/     C 实现的启动拦截器（备用透明路径）
+packaging/aur/   PKGBUILD；推 v* tag 后 CI 自动构建、发 Release、推 AUR
 ```
+
+## 发布
+
+推一个 `v*` tag 即触发 `.github/workflows/build.yml`：在 Arch 容器里
+`makepkg` 构建、生成 `.SRCINFO`、把 PKGBUILD 推到 AUR 仓库、把
+`.pkg.tar.zst` 附到 GitHub Release。手动触发（`workflow_dispatch`）只构建不发布，
+用于打 tag 前先验证。
