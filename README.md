@@ -1,0 +1,123 @@
+# Chromius
+
+把系统里多个 Electron 应用收进**一个共享的 Chromium 宿主**，消除重复的浏览器基础设施（Browser / GPU / zygote / Network / audio 进程），同时让每个应用保留独立的存储、JS 上下文和 `app` 视图。
+
+## 它能解决什么
+
+每个 Electron 应用都自带一整套 Chromium 栈。装 5 个 Electron 应用，就有 5 份 GPU 进程、5 份网络服务、5 套 zygote —— 这些都是纯开销。Chromius 让它们**共用一套**。
+
+本机实测（PSS，共享页按比例折算后的真实占用）：
+
+| 形态 | 进程数 | 总 PSS |
+|---|---|---|
+| 1 个应用独立运行 | 6 | 274 MB |
+| **1 个共享宿主 + 1 个子应用** | 8 | **224 MB** |
+| **1 个共享宿主 + 2 个子应用** | 9 | **232 MB**（第二个只多 8 MB） |
+| 3 个应用各自独立 | 18 | 486 MB |
+
+关键：**每多接一个子应用，只增加一个渲染器（约几十 MB），不再重复整套基础设施。**
+
+## 不能做什么（诚实说明）
+
+- **无法把 Kiro / antigravity 这类重原生应用塞进来**：它们带 `node-pty` 等原生 `.node` 模块，有进程级全局状态且 ABI 绑定 Electron 主版本。Chromius 会检测到并让它们独立运行（`doctor` 会说明原因）。
+- **运行时版本必须匹配**：应用是哪个 Electron 大版本，就需要那个版本的宿主（原生模块 ABI 与 V8 绑定）。没有对应运行时就回退独立运行。
+- **不接管 Edge / Steam**：它们不是 Electron 应用（不读 `app.asar`），不在管辖范围。
+
+## 工作原理
+
+```
+ .desktop (用户级覆盖，保留全部元数据)
+      │  Exec=node chromius launch <真实二进制> <原始参数…>
+      ▼
+   chromius launch ──探测结构──► 是 Electron 应用?
+      │                           │
+      │ 否 / 原生模块 / 无运行时     │ 是
+      ▼                           ▼
+  exec 真实二进制            chromiusd (unix socket)
+  （行为与今日完全一致）           │
+                                 ▼
+                          共享宿主 electron<major>
+                          ├── 唯一 Browser 进程
+                          ├── 唯一 GPU 进程
+                          ├── 唯一 Network / audio / zygote
+                          ├── 子应用 A ─ vm 沙盒（跑其 main.js）
+                          └── 子应用 B ─ 渲染器窗口
+```
+
+### 两种接入模式（自动选择，无逐应用代码）
+
+- **vm 模式**：有 `package.json.main` 且无原生模块的应用。用 `vm.createContext` 在宿主内运行它的主进程逻辑，注入**虚拟 `app`**（隔离的 `userData`/名称/单实例锁）和**作用域 `ipcMain`**（通道自动加 `<id>:` 前缀）。
+- **web 模式**：其余情况。为它开一个窗口，使用独立 `session` partition（磁盘上独立的 profile 目录）。
+
+### 隔离能力
+
+| 能隔离（每应用独立） | 不能隔离（进程级单例） |
+|---|---|
+| cookie / localStorage / IndexedDB / 缓存 | `app.getPath('userData')` 全局值 |
+| service worker / storage | 原生模块的进程级全局状态 |
+| session partition（独立 profile 目录） | 进程级开关（`--disable-gpu` 等）→ 需专用宿主 |
+| `app` 名称 / 单实例锁 / `ipcMain` | — |
+
+## 安装
+
+```bash
+npm install
+npm run build          # 编译 TS + shim
+
+node out/cli/index.js doctor          # 看本机各应用能否接入
+node out/cli/index.js install         # 生成用户级 .desktop 接管（无需 root）
+node out/cli/index.js uninstall       # 撤销接管
+```
+
+`install` **不改任何应用文件**，只在 `~/.local/share/applications/` 生成接管版 `.desktop`，完整保留原 Name/Icon/Categories/MimeType 和全部启动参数，只把 `Exec` 改为经 Chromius 启动。应用自身的自动更新不会破坏它。
+
+### 守护进程（可选，让首次启动更快）
+
+```bash
+node out/cli/index.js daemon
+# 或交给 systemd --user：
+cp systemd/chromiusd.service ~/.config/systemd/user/
+systemctl --user enable --now chromiusd
+```
+
+`launch` 在 daemon 未运行时也会自动拉起它。
+
+### 补齐缺失的运行时
+
+```bash
+node out/cli/index.js init-runtime 44    # 提示如何安装 electron44
+```
+
+## 命令
+
+| 命令 | 作用 |
+|---|---|
+| `doctor` | 报告每个应用能否接入、不能的原因、需要的运行时 |
+| `install` / `uninstall` | 生成 / 移除 `.desktop` 接管 |
+| `launch <bin> [args…]` | 经 Chromius 启动一个应用 |
+| `status` | 查看运行中的宿主与子应用 |
+| `daemon` | 前台运行守护进程 |
+| `init-runtime <major>` | 检查/安装某个 Electron 运行时 |
+
+## 兜底原则
+
+**任何环节失败都回退到独立运行**：探测失败、原生模块、运行时缺失、宿主报错、加载超时 —— 一律 `exec` 真实二进制，行为与直接运行完全一致。不会因为 Chromius 让应用打不开。
+
+## 测试
+
+```bash
+npm run build
+bash test/e2e.sh            # 端到端：唯一宿主 + 边际成本
+./test/measure-pss.sh <pid> # 测量某进程树的真实 PSS
+```
+
+## 目录
+
+```
+src/
+  shared/   探测算法（结构识别，零逐应用代码）、路径、协议、类型
+  shell/    宿主：clients、vm 沙盒、虚拟 app、socket 服务、入口
+  daemon/   按运行时版本管理宿主生命周期
+  cli/      install / launch / status / doctor / init-runtime；installer
+  shim/     C 实现的启动拦截器（备用透明路径）
+```

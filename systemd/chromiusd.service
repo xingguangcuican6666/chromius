@@ -1,0 +1,15 @@
+[Unit]
+Description=Chromius broker daemon (shared Chromium host supervisor)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /usr/share/chromius/daemon/main.js
+Restart=on-failure
+RestartSec=2
+# 图形会话相关的变量由导入的环境提供（在 Hyprland 的配置里 import-environment）
+Environment=XDG_CURRENT_DESKTOP=Hyprland
+
+[Install]
+WantedBy=default.target

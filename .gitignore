@@ -1,0 +1,21 @@
+# Build output
+/out/
+/pkg/
+*.pkg.tar.zst
+*.pkg.tar.xz
+*.pkg.tar.gz
+
+# Dependencies are vendored into the AUR build by PKGBUILD, not committed.
+/node_modules/
+
+# Local build products
+*.map
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*~
+
+# Local experiments and measurement evidence
+/evidence/
+/tmp/

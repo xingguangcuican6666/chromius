@@ -1,0 +1,115 @@
+# Maintainer: xingguangcuican <aur@aur-a.meowarch.top>
+#
+# chromius — run many Electron apps inside one shared Chromium host.
+#
+# Build-time dependencies stay off the AUR. The compiler is Arch's own
+# `typescript`, and the two type packages are pinned and fetched from npm
+# because:
+#   - Arch's `electron*` packages ship the binary only, with no electron.d.ts,
+#     so the TypeScript sources cannot be type-checked against them;
+#   - the `electron` npm package supplies exactly that one declaration file
+#     (210 KB), not the 200 MB runtime download;
+#   - pinning versions means the package builds identically later.
+#
+# Runtime has no npm dependencies at all: only Node built-ins plus whichever
+# /usr/lib/electron<major> the user installs for their apps.
+
+pkgname=chromius
+pkgver=0.1.1
+pkgrel=1
+pkgdesc='Run multiple Electron apps inside one shared Chromium host'
+arch=('x86_64')
+url='https://github.com/xingguangcuican6666/chromius'
+license=('MIT')
+depends=('nodejs')
+makedepends=('git' 'gcc' 'typescript')
+optdepends=(
+  'electron39: shared runtime host for Electron 39 apps'
+  'electron40: shared runtime host for Electron 40 apps'
+  'electron41: shared runtime host for Electron 41 apps'
+  'electron42: shared runtime host for Electron 42 apps'
+  'electron43: shared runtime host for Electron 43 apps'
+  'electron44: shared runtime host for Electron 44 apps'
+)
+options=('!strip')
+
+source=(
+  "git+https://github.com/xingguangcuican6666/chromius.git#tag=v$pkgver"
+  "electron-45.3.2.tgz::https://registry.npmjs.org/electron/-/electron-45.3.2.tgz"
+  "types-node-22.19.4.tgz::https://registry.npmjs.org/@types/node/-/node-22.19.4.tgz"
+)
+sha256sums=(
+  'SKIP'
+  '1503b66f8b5359346fe69e7a0062db69f9384bed921fc206fcd65d827fb29857'
+  '4ac39085279208474b53c8d30b25b16d10b058ef6bee971905e5ec7f2c43844d'
+)
+
+prepare() {
+  cd "$srcdir"
+
+  # Type declarations for the compiler. Only the .d.ts files are needed; the
+  # electron npm package's postinstall would download the runtime, which is
+  # pointless here — the app runs against a system electron at runtime.
+  mkdir -p types
+  tar xf "$srcdir/electron-45.3.2.tgz" -C types
+  tar xf "$srcdir/types-node-22.19.4.tgz" -C types
+  # @types/node unpacks into a directory whose name carries a space and the
+  # version; move it to the path TypeScript looks for. Guarded because
+  # prepare() can run again on an already-prepared tree.
+  if [[ -d "types/node v22.19" ]]; then
+    mv "types/node v22.19" "types/node"
+  fi
+}
+
+build() {
+  cd "$srcdir"
+
+  # Compile in a scratch copy rather than in the checkout: the checkout has no
+  # node_modules (it is gitignored), and mutating a git tree during a build is
+  # a good way to ship stale output.
+  rm -rf build
+  mkdir -p build/node_modules/@types
+  cp -r chromius/src chromius/tsconfig.json chromius/package.json build/
+  cp -r types/package build/node_modules/electron
+  cp -r types/node build/node_modules/@types/node
+
+  cd build
+  tsc -p tsconfig.json
+
+  # The C shim is the transparent fallback path: it execs the real binary
+  # whenever the host is unavailable.
+  gcc -O2 -Wall -o out/chromius-shim src/shim/chromius-shim.c
+}
+
+package() {
+  local dest="$pkgdir/usr/share/chromius"
+  install -d "$dest"
+
+  # Runtime code: .js only. Source maps are build artefacts, not runtime.
+  local js
+  while IFS= read -r -d '' js; do
+    local rel="${js#"$srcdir/build/out/"}"
+    install -Dm644 "$js" "$dest/$rel"
+  done < <(find "$srcdir/build/out" -name '*.js' -print0)
+
+  install -Dm755 "$srcdir/build/out/chromius-shim" "$dest/chromius-shim"
+  install -Dm644 "$srcdir/build/package.json" "$dest/package.json"
+  install -Dm644 "$srcdir/chromius/README.md" "$dest/README.md"
+
+  # Launcher
+  install -d "$pkgdir/usr/bin"
+  cat > "$pkgdir/usr/bin/chromius" <<'EOF'
+#!/bin/sh
+exec /usr/bin/node /usr/share/chromius/cli/index.js "$@"
+EOF
+  chmod 755 "$pkgdir/usr/bin/chromius"
+
+  # systemd user unit
+  install -Dm644 "$srcdir/chromius/systemd/chromiusd.service" \
+    "$pkgdir/usr/lib/systemd/user/chromiusd.service"
+
+  install -Dm644 "$srcdir/chromius/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+# vim:set ft=sh:

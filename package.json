@@ -1,0 +1,22 @@
+{
+  "name": "chromius",
+  "version": "0.1.1",
+  "description": "Run many Electron apps inside one shared Chromium host",
+  "private": true,
+  "type": "commonjs",
+  "main": "out/shell/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && npm run build:shim",
+    "build:shim": "gcc -O2 -Wall -o out/chromius-shim src/shim/chromius-shim.c",
+    "build:watch": "tsc -p tsconfig.json -w",
+    "shell": "electron out/shell/main.js",
+    "daemon": "node out/daemon/main.js",
+    "cli": "node out/cli/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "electron": "^45.0.0",
+    "typescript": "^5.6.0"
+  }
+}
